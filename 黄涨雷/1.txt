@@ -1,1 +1,137 @@
-z
+# 几何深度学习视角下的三维数字版权保护
+## 1. 绪论
+随着元宇宙(Metaverse)、数字孪生(Digital Twins)、自动驾驶以及增材制造(Additive Manufacturing)等领域的爆发式增长，三维(3D)数字内容已成为继文本、图像、视频之后的第四大类核心数字资产。不同于二维图像规则的网格结构，三维数据(主要表现为点云、网格、体素及近年来兴起的神经辐射场NeRF 和3D Gaussian Splatting)具有非结构化、无序性及复杂的拓扑特征，这使得传统的数字水印技术在三维领域面临着严峻的挑战。
+本报告旨在系统梳理计算机图形学与深度学习交叉领域在三维水印方面的演进路径。我们将重点剖析从早期的手工几何特征嵌入，向基于自编码器(Autoencoders)、生成对抗网络(GANs)、掩码自编码器(MAE)及扩散模型(Diffusion Models)等深度生成范式转移的内在逻辑。特别是，本报告将深入探讨在“低维流形(Low-dimensional Manifold)”假设下，如何利用扩散模型的生成机制实现“内生性”版权保护，并据此规划研究方案。
+
+### 1.1 三维水印的独特挑战与几何深度学习的介入
+三维数据的高维冗余性看似为水印嵌入提供了巨大的容量，但其实际的几何分布往往受限于低维流形。例如，人体扫描数据虽然由数百万个三维坐标点组成，但其本质上受限于骨骼驱动的非刚性形变表面。传统的基于空域(Spatial Domain)或简单的频域变换(如DCT、DFT)难以捕捉这种内蕴几何结构，导致水印在经历等距形变(Isometric Deformation，如人物姿态改变)或重采样(Remeshing)时极易丢失。
+近年来，几何深度学习(Geometric Deep Learning)的兴起，特别是PointNet 系列、Graph Neural Networks (GNNs) 以及各类流形学习算法的应用，为解决上述问题提供了新的数学工具。研究重心已从“如何隐藏信息”转向“如何学习一个对攻击鲁棒的几何特征表示”。
+
+## 2. 深度学习驱动的三维水印架构演进
+在这一阶段，研究界主要关注如何将传统的信号处理方法(如奇异值分解SVD、拉普拉斯变换)与神经网络的特征提取能力相结合。
+
+### 2.1 混合架构:谱分解与点云网络的融合
+早期的深度学习水印方案倾向于采用“传统嵌入+深度提取”的混合模式。这种策略的核心思想是利用传统算法(如SVD)在数学上的稳定性进行水印嵌入，同时利用深度神经网络(DNN)强大的非线性映射能力进行鲁棒提取。
+根据最新的SOTA 研究回顾，一种典型的架构是结合奇异值分解(SVD)与PointNet++。
+● 嵌入机制:将三维点云分块，对每个块的协方差矩阵进行SVD 分解。水印信息被量化嵌入到奇异值中。奇异值代表了点云局部几何的主要能量分布，具有旋转和平移不变性，且对噪声具有一定的天然鲁棒性。
+● 提取机制:传统的SVD 提取法极度依赖于点云的排序和完整的几何结构。一旦点云遭受裁剪 (Cropping)或乱序(Shuffling)攻击，传统方法将失效。深度学习的引入改变了这一局面。研究者训练PointNet++网络直接从受损的点云块中回归出水印比特流。PointNet++的分层特征提取能力使其能够捕捉局部的几何上下文，即使在70%的点云数据被裁剪丢失的情况下，依然能保持较高的提取精度。
+
+传统SVD 方法与深度神经水印方法的鲁棒性对比 (基于ModelNet40 数据集)
+攻击类型 | 强度参数 | 传统 SVD 位准确率 (Bit Accuracy) | 深度学习 (PointNet++) 位准确率 | IoU ( 深度学习 )
+--- | --- | --- | --- | ---
+裁剪 (Crop) | 70% 丢失 | 0.58 | 0.83 | 0.80
+噪声 (Noise) | 1.0% 高斯 | 0.65 | 0.91 | 0.88
+旋转 (Rotation) | 任意角度 | 0.98 | 0.99 | 0.99
+重采样 | 50% 简化 | 0.62 | 0.85 | 0.82
+
+这种混合架构的成功证明了一个核心观点:深度神经网络可以被视为一种高维的纠错码解码器，它利用从海量数据中学习到的几何先验，填补了传统信号处理在数据受损时的信息真空。
+
+### 2.2 端到端自编码器(Autoencoders)与潜在空间水印
+随着图卷积网络(GCN)和3D CNN 的发展，完全基于深度学习的端到端(End-to-End)水印框架开始出现。自编码器(AE)成为这一时期的主流范式。
+● 编码器(Encoder)作为嵌入器:网络接收原始三维模型(M)和水印信息(w)，输出含水印模型(Mw)。损失函数约束 M 与 Mw 在几何上的感知差异(如Chamfer Distance 或 Hausdorff Distance)最小化。
+● 解码器(Decoder)作为提取器:网络接收受攻击的模型(Matt)，输出提取的水印(w')。
+● 攻击模拟层(Noise Layer):为了提高鲁棒性，在编码器和解码器之间加入不可导攻击的微分近似层(Differentiable Noise Layer)，使网络在训练过程中就能“见识”到各种几何攻击，从而学习到对攻击免疫的特征分布。
+然而，普通的自编码器在处理点云时往往关注全局形状，容易忽略局部细节。这促使了更高级的“掩码自编码器(MAE)”的引入。
+
+## 3. 掩码自编码器(MAE)与自监督学习的鲁棒性增强
+掩码自编码器(Masked Autoencoders)最初在NLP(BERT)和2D 视觉(ViT)领域大放异彩，其在3D 点云领域的应用(如Point-MAE)为水印的鲁棒性带来了质的飞跃。
+
+### 3.1 MAE 作为几何修复先验
+在水印提取任务中，最大的敌人是数据的缺失(如遮挡、裁剪)。MAE通过“掩码-重建”的预训练任务，强迫网络学习点云的内在拓扑结构和全局语义依赖。
+● 工作机制:将点云划分为若干Patch，随机掩盖高比例(如60%-80%)的Patch，仅将可见部分输入编码器。解码器则负责根据潜在向量重建完整的点云坐标。
+● 在水印中的创新应用:SOTA 研究指出，可以将MAE 集成到水印提取端。当接收到残缺的含水印点云时，首先利用预训练的MAE进行几何补全(Geometry Completion)，然后再进行水印提取。这种“先修复后提取”的策略，使得水印算法能够抵抗极端的剪切攻击。
+
+### 3.2 跨模态自监督学习
+为了进一步提升特征的通用性，研究者开始探索跨模态(Cross-Modal)自监督学习。
+● 2D-3D 一致性:利用对比学习(Contrastive Learning)框架(如SimCLR, MoCo)，将3D 点云与其渲染的2D 多视角图像对齐。
+● 水印的跨域生存:这种学习机制使得水印特征不仅存在于三维几何中，也隐式地存在于渲染后的二维图像特征中。这意味着，即使用户将三维模型截图保存为图片，通过特定的跨模态提取器，依然有可能追溯版权。这在“元宇宙”资产确权中具有极高的应用价值。
+MGM-AE (Mesh Graph Masked Autoencoder) 的提出更是将这一概念推向了网格数据。通过将网格面片视为图节点，MGM-AE 不仅利用了顶点位置信息，还利用了网格的拓扑连接关系(邻接矩阵)。这种结合了图注意力机制(GAT)的MAE，在处理非刚性形变物体(如人体、动物)的水印任务中，表现出了远超纯点云方法的鲁棒性。
+
+## 4. 生成对抗网络(GANs)与对抗性水印
+GANs 在三维水印中的应用主要集中在解决“不可感知性”与“鲁棒性”的博弈(Trade-off)。
+
+### 4.1 覆盖式水印与无载体隐写
+● 增强不可感知性:传统的加性水印(Additive Watermarking)往往会引入高频噪声，导致表面粗糙。基于GAN 的水印模型利用判别器(Discriminator)作为感知损失函数。判别器负责区分原始模型和含水印模型，逼迫生成器(嵌入器)将水印隐藏在纹理复杂或几何曲率较大的区域(即人类视觉系统HVS 不敏感区域)，从而实现“完美伪装”。
+● 无监督域适应:CycleGAN 等架构被用于解决水印模型在不同数据集(如从合成数据 ShapeNet 到真实扫描数据ScanObjectNN)之间的泛化问题。
+尽管GAN 在视觉质量上表现优异，但其训练的不稳定性(Mode Collapse)和在精确几何控制上的不足，逐渐让位于新兴的扩散模型。
+
+## 5. 扩散模型与低维流形:SOTA 的核心前沿
+当前的SOTA 研究已经全面转向扩散模型(Diffusion Models)，特别是结合“低维流形(Lowdimensional Manifold)”理论的生成式模型。
+
+### 5.1 为什么标准扩散模型不适用于三维流形?
+标准的去噪扩散概率模型(DDPM)通常在欧几里得空间(Ambient Euclidean Space)中添加各向同性的高斯噪声。然而，三维数据通常分布在低维流形上(例如，三维空间中的二维曲面)。
+● 破坏流形结构:直接添加欧式噪声会将数据点推离流形表面，破坏几何拓扑。
+● 无效生成:在反向去噪过程中，模型需要花费大量计算资源将数据“拉回”流形，导致生成效率低下且容易产生几何伪影。
+
+### 5.2 流形扩散场 (Manifold Diffusion Fields, MDF)
+为了解决上述问题，SOTA 研究提出了流形扩散场(MDF)。这是几何深度学习与生成模型的深度融合。
+
+#### 5.2.1 本征坐标系与拉普拉斯-贝尔特拉米算子 (LBO)
+MDF 的核心创新在于放弃XYZ 笛卡尔坐标系，转而使用流形的本征坐标系(Intrinsic Coordinate System)。
+● LBO 谱分解:对于任意黎曼流形 M ,其几何结构由拉普拉斯-贝尔特拉米算子ΔM及其本征函数(Eigen Functions)φi和本征值λi唯一确定。
+● 等距不变性:LBO 本征函数仅依赖于流形的黎曼度量(Metric Tensor)。当三维模型发生等距形变(如纸张弯曲、人体姿态变化)时，虽然XYZ 坐标剧烈变化，但其LBO 谱特征保持不变。
+● 扩散机制:MDF 直接在由LBO 本征函数定义的谱空间或流形表面上定义扩散过程。这使得生成模型自然地具备了对非刚性形变的鲁棒性。
+
+### 5.3 DoubleDiffusion:热扩散与去噪扩散的结合
+2025 年的最新研究提出了DoubleDiffusion 框架，这是目前流形学习机制的巅峰之作。
+● 双重扩散机制:
+1. 几何特征提取(热扩散):利用热传导方程(Heat Diffusion Equation)∂u/∂t=-ΔM u 在流形表面提取多尺度的几何特征。热核签名(HKS)自然地抑制了高频噪声，提取出稳定的全局拓扑特征。
+2. 信号生成(去噪扩散):在热扩散提取的特征基础上，应用概率去噪扩散模型 (DDPM)生成纹理或细粒度几何信号。
+● 优势:相比MDF，DoubleDiffusion 不仅利用了流形约束，还利用了热扩散作为一种高效的 “几何平滑”算子，极大地提升了生成质量和收敛速度。对于水印而言，这意味着可以将信息嵌入到热核特征中，从而实现对任何几何形变和拓扑噪声的免疫。
+
+### 5.4 潜在几何扩散 (Geometric Latent Diffusion)
+针对高分辨率数据，几何潜在扩散模型 (GeoLDM) 将数据映射到低维潜在空间(Latent Space)，在该空间中进行扩散。
+● SE(3) 等变性:为了处理三维分子的旋转平移，GeoLDM 构建了包含不变标量(Invariant Scalars)和等变向量(Equivariant Vectors)的潜在空间。这为水印提供了新的思路:将版权信息绑定到“不变标量”中，而将几何姿态信息绑定到“等变向量”中，从而实现旋转无关的水印提取。
+
+## 6. 三维高斯泼溅 (3D Gaussian Splatting) 的水印新战场
+2023 年以来，3D Gaussian Splatting (3DGS) 迅速取代NeRF 成为实进渲染的新标准。针对3DGS 的水印研究(如GaussianSeal, WATER-GS)在2025-2026 年集中爆发。
+
+### 6.1 3DGS 的数据特性
+3DGS由数百万个各向异性的3D高斯球组成，每个高斯球包含位置(μ)、协方差(∑)、颜色(SH 系数)和不透明度。它既不是网格也不是纯点云，是一种半结构化的稀疏表示。
+
+### 6.2 嵌入策略与挑战
+● 协方差矩阵调制:RDSplat 和 GaussianSeal 选择微调高斯球的协方差矩阵或球谐系数来嵌入信息。
+● 生成式水印:GaussianSeal 的核心创新在于它是一个“生成式”水印框架。它不是在生成后的3DGS 上加水印，而是在生成过程中(In-Generation)，通过修改生成模型的损失函数，使得生成的3DGS 天生带有水印。
+● 抗编辑性:3DGS 常用于场景编辑。GaussianSeal 引入了自适应比特调制(Adaptive Bit Modulation)，确保水印分布在对渲染质量贡献最大(即最不可能被剪枝或编辑掉)的高斯球上。
+
+## 7. SOTA 局限性分析
+通过对近十年文献的梳理，我们发现了当前技术体系中存在的局限性，这正是未来研究的突破口。
+
+### 7.1 现有局限性
+1. 流形约束的缺失:目前大多数3DGS 水印仍然在欧氏空间操作高斯参数，缺乏对场景内在流形结构的利用。
+2. 生成与保护的分离:虽然GaussianSeal 尝试了生成式嵌入，但大多数方法仍是后处理(Postprocessing)。如果攻击者使用另一个扩散模型对资产进行“去噪净化”(Purification)，水印极易被抹除。
+3. 非刚性形变的盲区:针对3DGS 的动态场景(4D Gaussian Splatting)水印研究几乎空白。现有的方法无法处理随时间形变的3DGS 流。
+
+### 7.2 交叉领域
+1. 流形热扩散 + 3DGS:将DoubleDiffusion 的热扩散机制引入3DGS，利用高斯球之间的邻接关系构建隐式图结构，在此图谱上进行谱域水印嵌入，可实现对动态3DGS 的鲁棒保护。
+2. MAE 作为神经解码器:利用MAE 强大的补全能力，作为3DGS 水印提取的前置模块，对抗稀疏化(Sparsification)攻击。
+
+## 8. 结论
+未来的三维版权保护技术将不再是简单的“信息隐藏”，而是几何属性的深度纠缠，是一条从“外在嵌入”到“内在生成”的发展脉络。
+
+## 参考文献
+1. Deep Neural Watermarking for Robust Copyright Protection in 3D Point Clouds - arXiv, https://arxiv.org/abs/2510.27533
+2. Deep Neural Watermarking for Robust Copyright Protection ... - arXiv, https://arxiv.org/pdf/2510.27533
+3. DiffPMAE: Diffusion Masked Autoencoders for Point Cloud Reconstruction - ECVA | European Computer Vision Association, https://www.ecva.net/papers/eccv_2024/papers_ECCV/papers/06294.pdf
+4. DiffuseTrace: A Transparent and Flexible Watermarking Scheme for Latent Diffusion Model, https://arxiv.org/html/2405.02696v2
+5. WATER-GS: Watermark-embedded 3D Gaussian Splatting via Plug-and-play Decoder, https://openreview.net/forum?id=H48OMCCiI7
+6. MGM-AE: Self-Supervised Learning on 3D ... - CVF Open Access, https://openaccess.thecvf.com/content/WACV2024/papers/Yang_MGM-AE_SelfSupervised_Learning_on_3D_Shape_Using_Mesh_Graph_Masked_WACV_2024_paper.pdf
+7. Point Cloud Self-supervised Learning via 3D to Multi-view Masked Learner - CVF Open Access, https://openaccess.thecvf.com/content/ICCV2025/papers/Chen_Point_Cloud_Selfsupervised_Learning_via_3D_to_Multi-view_Masked_Learner_ICCV_2025_paper.pdf
+8. Self-Supervised Learning of LiDAR 3D Point Clouds via 2D-3D Neural Calibration | Request PDF - ResearchGate, https://www.researchgate.net/publication/393217564_SelfSupervised_Learning_of_LiDAR_3D_Point_Clouds_Via_2D-3D_Neural_Calibration
+9. DiffPMAE: Diffusion Masked Autoencoders for Point Cloud Reconstruction - arXiv, https://arxiv.org/html/2312.03298v3
+10. (PDF) Deep Neural Watermarking for Robust Copyright Protection in 3D Point Clouds, https://www.researchgate.net/publication/397188937_Deep_Neural_Watermarking_for_Robust_Copyright_Protection_in_3D_Point_Clouds
+11. Deep Learning for Image Watermarking: A Comprehensive Review and Analysis of Techniques, Challenges, and Applications - PMC, https://pmc.ncbi.nlm.nih.gov/articles/PMC12845643/
+12. DoubleDiffusion: Combining Heat Diffusion with Denoising Diffusion for Texture Generation on 3D Meshes - arXiv, https://arxiv.org/html/2501.03397v5
+13. Daily Papers - Hugging Face, https://huggingface.co/papers?q=manifold%20geometry%20field
+14. MANIFOLD DIFFUSION FIELDS - ICLR Proceedings, https://proceedings.iclr.cc/paper_files/paper/2024/file/d903c4bb4e77f5de1ec92da2cf9dc8db-Paper-Conference.pdf
+15. Manifold Diffusion Fields - arXiv, https://arxiv.org/html/2305.15586v2
+16. DoubleDiffusion: Combining Heat Diffusion with Denoising Diffusion for Generative Learning on 3D Meshes - arXiv, https://arxiv.org/html/2501.03397v1
+17. DoubleDiffusion: Combining Heat Diffusion with Denoising Diffusion for Generative Learning on 3D Meshes - ResearchGate, https://www.researchgate.net/publication/387797933_DoubleDiffusion_Combining_Heat_Diffusion_with_Denoising_Diffusion_for_Generative_Learning_on_3D_Meshes
+18. Comprehensive Benchmark Study of Diffusion-Based 3D Molecular Generation Models | ACS Omega - ACS Publications, https://pubs.acs.org/doi/10.1021/acsomega.5c05077
+19. Geometry-complete latent diffusion model for 3D molecule generation - Oxford Academic, https://academic.oup.com/bioinformatics/article/41/8/btaf426/8219452
+20. Daily Papers - Hugging Face, https://huggingface.co/papers?q=latent%20diffusion%20model
+21. 3D-GSW: 3D Gaussian Splatting for Robust Watermarking - Dr. Euijin Choo, https://alleychoo.github.io/papers/cvpr_gaussiansplatting_watermarking.pdf
+22. GaussianSeal: Rooting Adaptive Watermarks for 3D Gaussian Generation Model - arXiv, https://arxiv.org/html/2503.00531v2
+23. arxiv.org, https://arxiv.org/html/2602.03878v1
+24. Density-aware Chamfer Distance as a Comprehensive Metric for Point Cloud Completion - NeurIPS, https://proceedings.neurips.cc/paper/2021/file/f3bd5ad57c8389a8a1a541a76be463bfPaper.pdf
+25. Objaverse: A Universe of Annotated 3D Objects | Request PDF - ResearchGate, https://www.researchgate.net/publication/373322365_Objaverse_A_Universe_of_Annotated_3D_Objects
